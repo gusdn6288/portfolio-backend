@@ -1,39 +1,34 @@
-name: portfolio-backend
-app:
-  name: portfolio-backend
-  platform: docker
-  
-  # 포트 설정
-  ports:
-    - port: 4000
-      protocol: http
-  
-  # 환경 변수 (실제로는 Cloudtype 대시보드에서 설정)
-  envs:
-    - key: NODE_ENV
-      value: production
-    - key: PORT
-      value: "4000"
-    # 아래 변수들은 Cloudtype 대시보드에서 직접 입력하세요
-    # - key: MONGODB_URI
-    #   value: ${MONGODB_URI}
-    # - key: MONGODB_DB
-    #   value: ${MONGODB_DB}  
-    # - key: CORS_ORIGIN
-    #   value: https://your-vercel-app.vercel.app
+FROM node:20-alpine
 
-  # 리소스 설정 (선택사항)
-  resources:
-    cpu: 0.25
-    memory: 512
+WORKDIR /app
 
-  # Auto Scaling 설정 (선택사항)  
-  autoscale:
-    min: 1
-    max: 3
-    target_cpu: 70
+RUN apk update && apk add --no-cache \
+    dumb-init \
+    && rm -rf /var/cache/apk/*
 
-# 빌드 설정
-build:
-  context: .
-  dockerfile: Dockerfile
+COPY package.json package-lock.json* ./
+
+RUN npm ci --only=production && npm cache clean --force
+
+COPY tsconfig.json ./
+COPY src ./src
+
+RUN npm ci && npm run build && npm prune --production
+
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nextjs -u 1001
+
+RUN chown -R nextjs:nodejs /app
+USER nextjs
+
+ENV NODE_ENV=production
+ENV PORT=4000
+
+EXPOSE 4000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD node -e "require('http').get('http://localhost:4000/api/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"
+
+ENTRYPOINT ["dumb-init", "--"]
+
+CMD ["npm", "start"]
