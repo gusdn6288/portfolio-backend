@@ -3,11 +3,61 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
+import { createServer } from "http";
+import { Server } from "socket.io";
 import feedbackRouter from "./routes/feedback.js";
 import { getDb } from "./db.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
+
+// HTTP 서버 생성 (Socket.IO 붙이기 위함)
+const httpServer = createServer(app);
+
+// ✅ Socket.IO 서버 생성
+const io = new Server(httpServer, {
+  cors: {
+    origin: "*", // 개발 단계 전체 허용
+    methods: ["GET", "POST"],
+  },
+});
+
+// 클라이언트 연결 이벤트
+io.on("connection", (socket) => {
+  console.log("👤 User connected:", socket.id);
+
+  // 메시지 전송 이벤트
+  socket.on("chat:send", async (data) => {
+    try {
+      const db = await getDb();
+      const collection = db.collection("feedback");
+
+      const newMsg = {
+        slug: data.slug,
+        name: data.name || "익명",
+        message: data.message,
+        clientId: data.clientId,
+        createdAt: new Date(),
+      };
+
+      await collection.insertOne(newMsg);
+
+      // 모든 클라이언트에 브로드캐스트
+      io.emit("chat:newMessage", newMsg);
+      console.log(`📝 Message stored and broadcast: ${newMsg.message}`);
+    } catch (err) {
+      console.error("❌ DB 저장 실패:", err);
+    }
+  });
+
+  socket.on("disconnect", () => {
+    console.log("❌ User disconnected:", socket.id);
+  });
+});
+
+// ────────────────────────────────
+// 기존 Express 설정
+// ────────────────────────────────
 
 // 환경 변수 검증
 const requiredEnvVars = ["MONGODB_URI", "MONGODB_DB"];
@@ -30,7 +80,7 @@ const corsOptions = {
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
 };
 
-// 미들웨어 설정
+// 미들웨어
 app.use(cors(corsOptions));
 app.use(
   helmet({
@@ -41,10 +91,9 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("combined"));
 
-// Health Check 엔드포인트
+// Health Check
 app.get("/api/health", async (req, res) => {
   try {
-    // MongoDB 연결 상태 확인
     const db = await getDb();
     await db.admin().ping();
 
@@ -73,13 +122,13 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
-// API 라우트 등록
+// API 라우트
 app.use("/api/feedback", feedbackRouter);
 
 // 기본 라우트
 app.get("/", (req, res) => {
   res.json({
-    message: "🚀 Portfolio Backend API",
+    message: "🚀 Portfolio Backend API with Socket.IO",
     version: "1.0.0",
     status: "running",
     timestamp: new Date().toISOString(),
@@ -90,6 +139,7 @@ app.get("/", (req, res) => {
         post: "/api/feedback",
         delete: "/api/feedback/:id",
       },
+      socket: "chat:send / chat:newMessage",
     },
   });
 });
@@ -112,7 +162,6 @@ app.use(
     next: express.NextFunction
   ) => {
     console.error("💥 Unhandled error:", error);
-
     res.status(500).json({
       error: "Internal Server Error",
       message: "서버에서 예상치 못한 오류가 발생했습니다.",
@@ -125,19 +174,16 @@ app.use(
 // 서버 시작
 async function startServer() {
   try {
-    // MongoDB 연결 테스트
     console.log("🔗 Testing database connection...");
     const db = await getDb();
     await db.admin().ping();
     console.log("✅ Database connection successful");
 
-    // 서버 시작
-    app.listen(PORT, "0.0.0.0", () => {
+    httpServer.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
       console.log(`📝 Feedback API: http://localhost:${PORT}/api/feedback`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
-      console.log(`🔒 CORS Origin: ${CORS_ORIGIN}`);
+      console.log(`💬 Socket.IO ready at ws://localhost:${PORT}`);
     });
   } catch (error) {
     console.error("💥 Failed to start server:", error);
