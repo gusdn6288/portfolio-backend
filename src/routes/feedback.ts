@@ -12,6 +12,7 @@ const BodySchema = z.object({
   message: z.string().trim().min(1).max(1000),
   email: z.string().email().optional().or(z.literal("")),
   hp: z.string().optional(), // honeypot field for bot detection
+  clientId: z.string().uuid().optional(), // ✅ 프론트에서 보낸 UUID
 });
 
 // 피드백 타입 정의
@@ -21,6 +22,7 @@ interface Feedback {
   name: string;
   message: string;
   email?: string;
+  clientId?: string; // ✅ 내 메시지 판별용 UUID
   createdAt: Date;
 }
 
@@ -53,6 +55,7 @@ router.get("/", async (req: Request, res: Response) => {
       slug: feedback.slug,
       name: feedback.name,
       message: feedback.message,
+      clientId: feedback.clientId, // ✅ 응답에 포함
       createdAt: feedback.createdAt,
     }));
 
@@ -85,7 +88,7 @@ router.post("/", async (req: Request, res: Response) => {
       });
     }
 
-    const { slug, name = "익명", message, email, hp } = parsed.data;
+    const { slug, name = "익명", message, email, hp, clientId } = parsed.data;
 
     // Honeypot 체크 (봇 차단)
     if (hp && hp.trim()) {
@@ -101,6 +104,7 @@ router.post("/", async (req: Request, res: Response) => {
       name,
       message,
       email: email || undefined,
+      clientId, // ✅ UUID 저장
       createdAt: new Date(),
     };
 
@@ -108,10 +112,9 @@ router.post("/", async (req: Request, res: Response) => {
 
     console.log(`✅ New feedback created with ID: ${result.insertedId}`);
     console.log(
-      `📝 From: ${name} | Slug: ${slug} | Message: ${message.substring(
-        0,
-        50
-      )}...`
+      `📝 From: ${name} | Slug: ${slug} | ClientId: ${
+        clientId || "N/A"
+      } | Message: ${message.substring(0, 50)}...`
     );
 
     return res.status(201).json({
@@ -128,7 +131,7 @@ router.post("/", async (req: Request, res: Response) => {
   }
 });
 
-// DELETE /api/feedback/:id (관리자용 - 선택사항)
+// DELETE /api/feedback/:id (관리자용)
 router.delete("/:id", async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
