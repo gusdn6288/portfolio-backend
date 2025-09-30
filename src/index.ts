@@ -1,4 +1,3 @@
-// src/index.ts
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -15,11 +14,28 @@ const PORT = Number(process.env.PORT) || 4000;
 // HTTP 서버 생성
 const httpServer = createServer(app);
 
-// Socket.IO 서버 생성
-const SOCKET_CORS_ORIGIN = process.env.SOCKET_CORS_ORIGIN
-  ? process.env.SOCKET_CORS_ORIGIN.split(",").map((origin) => origin.trim())
+// ──────────────────────────────
+// ✅ 환경변수 기반 CORS 설정
+// ──────────────────────────────
+const CORS_ORIGIN = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
   : ["http://localhost:5173"];
 
+const SOCKET_CORS_ORIGIN = process.env.SOCKET_CORS_ORIGIN
+  ? process.env.SOCKET_CORS_ORIGIN.split(",").map((o) => o.trim())
+  : ["http://localhost:5173"];
+
+// Express CORS
+const corsOptions = {
+  origin: CORS_ORIGIN,
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+};
+
+app.use(cors(corsOptions));
+
+// Socket.IO 서버 생성
 const io = new Server(httpServer, {
   cors: {
     origin: SOCKET_CORS_ORIGIN,
@@ -30,7 +46,6 @@ const io = new Server(httpServer, {
 
 // IP 추출 헬퍼 함수
 function getClientIp(socket: any): string {
-  // Proxy 환경 고려
   const forwarded = socket.handshake.headers["x-forwarded-for"];
   if (forwarded) {
     return (forwarded as string).split(",")[0].trim();
@@ -43,7 +58,6 @@ io.on("connection", (socket) => {
   const clientIp = getClientIp(socket);
   console.log(`👤 User connected: ${socket.id} (IP: ${clientIp})`);
 
-  // 메시지 전송
   socket.on("chat:send", async (data) => {
     try {
       const db = await getDb();
@@ -53,13 +67,12 @@ io.on("connection", (socket) => {
         slug: data.slug,
         name: data.name || "익명",
         message: data.message,
-        clientIp: clientIp, // UUID 대신 IP 저장
+        clientIp: clientIp,
         createdAt: new Date(),
       };
 
       const result = await collection.insertOne(newMsg);
 
-      // _id를 문자열로 변환해서 전송
       const responseMsg = {
         ...newMsg,
         _id: result.insertedId.toString(),
@@ -77,28 +90,9 @@ io.on("connection", (socket) => {
   });
 });
 
-// 환경 변수 검증
-const requiredEnvVars = ["MONGODB_URI", "MONGODB_DB"];
-for (const envVar of requiredEnvVars) {
-  if (!process.env[envVar]) {
-    console.error(`❌ Missing required environment variable: ${envVar}`);
-    process.exit(1);
-  }
-}
-
-// CORS 설정
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
-const corsOptions = {
-  origin: ["http://localhost:5173"], // 개발용
-  credentials: true, // 세션/쿠키/인증 헤더까지 주고받을 수 있게
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-};
-
-app.use(cors(corsOptions));
-
+// ──────────────────────────────
 // 미들웨어
-app.use(cors(corsOptions));
+// ──────────────────────────────
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -108,7 +102,9 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("combined"));
 
+// ──────────────────────────────
 // Health Check
+// ──────────────────────────────
 app.get("/api/health", async (req, res) => {
   try {
     const db = await getDb();
@@ -139,7 +135,9 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
+// ──────────────────────────────
 // API 라우트
+// ──────────────────────────────
 app.use("/api/feedback", feedbackRouter);
 
 // 기본 라우트
@@ -188,7 +186,9 @@ app.use(
   }
 );
 
+// ──────────────────────────────
 // 서버 시작
+// ──────────────────────────────
 async function startServer() {
   try {
     console.log("🔗 Testing database connection...");
