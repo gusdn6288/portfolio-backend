@@ -1,3 +1,4 @@
+// src/routes/feedback.ts
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { getDb } from "../db.js";
@@ -5,28 +6,36 @@ import { ObjectId } from "mongodb";
 
 const router = Router();
 
-// Validation Schema
+// IP 추출 헬퍼 함수
+function getClientIp(req: Request): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (forwarded) {
+    return (forwarded as string).split(",")[0].trim();
+  }
+  return req.socket.remoteAddress || "unknown";
+}
+
+// Validation Schema (clientId 제거)
 const BodySchema = z.object({
   slug: z.string().min(1).max(200),
   name: z.string().trim().min(1).max(40).default("익명").optional(),
   message: z.string().trim().min(1).max(1000),
   email: z.string().email().optional().or(z.literal("")),
-  hp: z.string().optional(), // honeypot field for bot detection
-  clientId: z.string().uuid().optional(), // ✅ 프론트에서 보낸 UUID
+  hp: z.string().optional(), // honeypot
 });
 
-// 피드백 타입 정의
+// 피드백 타입
 interface Feedback {
   _id?: ObjectId;
   slug: string;
   name: string;
   message: string;
   email?: string;
-  clientId?: string; // ✅ 내 메시지 판별용 UUID
+  clientIp: string; // UUID 대신 IP
   createdAt: Date;
 }
 
-// GET /api/feedback?slug=/feedback
+// GET /api/feedback?slug=xxx
 router.get("/", async (req: Request, res: Response) => {
   try {
     const slug = String(req.query.slug ?? "");
@@ -41,7 +50,6 @@ router.get("/", async (req: Request, res: Response) => {
     const db = await getDb();
     const collection = db.collection<Feedback>("feedback");
 
-    // 인덱스 생성 (이미 존재하면 무시됨)
     await collection.createIndex({ slug: 1, createdAt: -1 });
 
     const feedbacks = await collection
@@ -55,7 +63,7 @@ router.get("/", async (req: Request, res: Response) => {
       slug: feedback.slug,
       name: feedback.name,
       message: feedback.message,
-      clientId: feedback.clientId, // ✅ 응답에 포함
+      clientIp: feedback.clientIp, // IP 포함
       createdAt: feedback.createdAt,
     }));
 
@@ -88,14 +96,15 @@ router.post("/", async (req: Request, res: Response) => {
       });
     }
 
-    const { slug, name = "익명", message, email, hp, clientId } = parsed.data;
+    const { slug, name = "익명", message, email, hp } = parsed.data;
 
-    // Honeypot 체크 (봇 차단)
+    // Honeypot 체크
     if (hp && hp.trim()) {
-      console.log("🤖 Bot detected via honeypot, ignoring request");
+      console.log("🤖 Bot detected via honeypot");
       return res.json({ success: true, message: "피드백이 등록되었습니다." });
     }
 
+    const clientIp = getClientIp(req);
     const db = await getDb();
     const collection = db.collection<Feedback>("feedback");
 
@@ -104,7 +113,7 @@ router.post("/", async (req: Request, res: Response) => {
       name,
       message,
       email: email || undefined,
-      clientId, // ✅ UUID 저장
+      clientIp, // IP 저장
       createdAt: new Date(),
     };
 
@@ -112,9 +121,10 @@ router.post("/", async (req: Request, res: Response) => {
 
     console.log(`✅ New feedback created with ID: ${result.insertedId}`);
     console.log(
-      `📝 From: ${name} | Slug: ${slug} | ClientId: ${
-        clientId || "N/A"
-      } | Message: ${message.substring(0, 50)}...`
+      `📝 From: ${name} (${clientIp}) | Slug: ${slug} | Message: ${message.substring(
+        0,
+        50
+      )}...`
     );
 
     return res.status(201).json({
@@ -131,7 +141,7 @@ router.post("/", async (req: Request, res: Response) => {
   }
 });
 
-// DELETE /api/feedback/:id (관리자용)
+// DELETE /api/feedback/:id
 router.delete("/:id", async (req: Request, res: Response) => {
   try {
     const { id } = req.params;

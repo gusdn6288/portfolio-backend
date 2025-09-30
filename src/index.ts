@@ -1,3 +1,4 @@
+// src/index.ts
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -11,22 +12,38 @@ import { getDb } from "./db.js";
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
 
-// HTTP 서버 생성 (Socket.IO 붙이기 위함)
+// HTTP 서버 생성
 const httpServer = createServer(app);
 
-// ✅ Socket.IO 서버 생성
+// Socket.IO 서버 생성
+const SOCKET_CORS_ORIGIN = process.env.SOCKET_CORS_ORIGIN
+  ? process.env.SOCKET_CORS_ORIGIN.split(",").map((origin) => origin.trim())
+  : ["http://localhost:5173"];
+
 const io = new Server(httpServer, {
   cors: {
-    origin: "*", // 개발 단계 전체 허용
+    origin: SOCKET_CORS_ORIGIN,
     methods: ["GET", "POST"],
+    credentials: true,
   },
 });
 
-// 클라이언트 연결 이벤트
-io.on("connection", (socket) => {
-  console.log("👤 User connected:", socket.id);
+// IP 추출 헬퍼 함수
+function getClientIp(socket: any): string {
+  // Proxy 환경 고려
+  const forwarded = socket.handshake.headers["x-forwarded-for"];
+  if (forwarded) {
+    return (forwarded as string).split(",")[0].trim();
+  }
+  return socket.handshake.address || "unknown";
+}
 
-  // 메시지 전송 이벤트
+// Socket.IO 연결
+io.on("connection", (socket) => {
+  const clientIp = getClientIp(socket);
+  console.log(`👤 User connected: ${socket.id} (IP: ${clientIp})`);
+
+  // 메시지 전송
   socket.on("chat:send", async (data) => {
     try {
       const db = await getDb();
@@ -36,28 +53,29 @@ io.on("connection", (socket) => {
         slug: data.slug,
         name: data.name || "익명",
         message: data.message,
-        clientId: data.clientId,
+        clientIp: clientIp, // UUID 대신 IP 저장
         createdAt: new Date(),
       };
 
-      await collection.insertOne(newMsg);
+      const result = await collection.insertOne(newMsg);
 
-      // 모든 클라이언트에 브로드캐스트
-      io.emit("chat:newMessage", newMsg);
-      console.log(`📝 Message stored and broadcast: ${newMsg.message}`);
+      // _id를 문자열로 변환해서 전송
+      const responseMsg = {
+        ...newMsg,
+        _id: result.insertedId.toString(),
+      };
+
+      io.emit("chat:newMessage", responseMsg);
+      console.log(`📝 Message from ${clientIp}: ${newMsg.message}`);
     } catch (err) {
       console.error("❌ DB 저장 실패:", err);
     }
   });
 
   socket.on("disconnect", () => {
-    console.log("❌ User disconnected:", socket.id);
+    console.log(`❌ User disconnected: ${socket.id} (IP: ${clientIp})`);
   });
 });
-
-// ────────────────────────────────
-// 기존 Express 설정
-// ────────────────────────────────
 
 // 환경 변수 검증
 const requiredEnvVars = ["MONGODB_URI", "MONGODB_DB"];
@@ -71,14 +89,13 @@ for (const envVar of requiredEnvVars) {
 // CORS 설정
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 const corsOptions = {
-  origin:
-    CORS_ORIGIN === "*"
-      ? true
-      : CORS_ORIGIN.split(",").map((origin) => origin.trim()),
-  credentials: false,
+  origin: ["http://localhost:5173"], // 개발용
+  credentials: true, // 세션/쿠키/인증 헤더까지 주고받을 수 있게
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
 };
+
+app.use(cors(corsOptions));
 
 // 미들웨어
 app.use(cors(corsOptions));
